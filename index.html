@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Nand's Trading Bot – Live Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://s3.tradingview.com/tv.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; background: #f4f6f8; color: #333; }
+    header { background: #007bff; color: white; padding: 20px; text-align: center; position: sticky; top: 0; z-index: 1000; }
+    h1, h2 { margin: 0; padding: 10px 0; }
+    .container { padding: 20px; max-width: 1200px; margin: auto; }
+    .section { margin-top: 40px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 10px; border: 1px solid #ddd; text-align: center; }
+    th { background: #f0f0f0; }
+    select, input { padding: 8px; margin: 10px 0; width: 100%; max-width: 300px; font-size: 16px; }
+    .btn { display: inline-block; margin-top: 10px; padding: 10px 15px; background: #007bff; color: white; text-decoration: none; border-radius: 5px; }
+    .btn:hover { background: #0056b3; }
+    canvas { margin-top: 20px; }
+    #stockList div { padding: 6px 0; border-bottom: 1px solid #eee; }
+    @media (max-width: 600px) { .section { padding: 15px; } th, td { font-size: 14px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>📈 Nand's Trading Bot – Live Dashboard</h1>
+    <a class="btn" href="https://t.me/Nandkisbot" target="_blank">Open Telegram Bot</a>
+    <a class="btn" href="https://github.com/nandu7582/option-trading-bot" target="_blank">View GitHub Repo</a>
+  </header>
+
+  <div class="container">
+    <!-- Chart Section -->
+    <div class="section">
+      <h2>📊 Select Live Chart</h2>
+      <select id="chartSelector">
+        <option value="">-- Select --</option>
+        <option value="BANKNIFTY">BANKNIFTY</option>
+        <option value="NIFTY">NIFTY</option>
+        <option value="BTCUSDT">BTC/USDT</option>
+      </select>
+      <div id="tv_chart" style="width:100%;height:400px;margin-top:10px;"></div>
+    </div>
+
+    <!-- Option Chain -->
+    <div class="section">
+      <h2>🔍 Live Option Chain & Open Interest</h2>
+      <table id="oiTable">
+        <thead><tr><th>Strike</th><th>OI (Call)</th><th>OI (Put)</th><th>ΔOI (%)</th></tr></thead>
+        <tbody><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <!-- Hedge Strategy -->
+    <div class="section">
+      <h2>🛡️ Suggested Hedge & Max P/L</h2>
+      <div><em id="hedgeSuggestion">Loading hedge strategy...</em></div>
+      <canvas id="plChart" width="800" height="300"></canvas>
+    </div>
+
+    <!-- Nifty 500 -->
+    <div class="section">
+      <h2>📃 NIFTY 500 Stocks</h2>
+      <input type="text" id="stockFilter" placeholder="Search stocks..." />
+      <div id="stockList">Loading stocks...</div>
+    </div>
+
+    <!-- Market News -->
+    <div class="section">
+      <h2>📰 Market Impact News</h2>
+      <ul id="newsList"><li>Loading news...</li></ul>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = "https://your-backend-url.onrender.com"; // ← Replace with your backend URL
+
+    // Chart Selector
+    let chartWidget = null;
+    document.getElementById('chartSelector').onchange = (e) => {
+      if (chartWidget) chartWidget.remove();
+      if (!e.target.value) return;
+      chartWidget = new TradingView.widget({
+        container_id: 'tv_chart',
+        width: "100%", height: 400,
+        symbol: e.target.value==="BTCUSDT" ? "BINANCE:BTCUSDT" : `NSE:${e.target.value}`,
+        interval: "15", timezone: "Asia/Kolkata",
+        theme: "light", style: "1", locale: "en",
+        toolbar_bg: "#f1f3f6", enable_publishing: false, hide_top_toolbar: true
+      });
+    };
+
+    // Load Option Chain
+    async function loadOI() {
+      try {
+        const res = await fetch(`${API_BASE}/api/option-chain?underlying=BANKNIFTY`);
+        const strikes = await res.json();
+        const tbody = document.querySelector('#oiTable tbody');
+        tbody.innerHTML = '';
+        strikes.slice(0,5).forEach(s => {
+          tbody.innerHTML += `<tr>
+            <td>${s.strike}</td>
+            <td>${s.call_oi}</td>
+            <td>${s.put_oi}</td>
+            <td>${s.oi_change_percent.toFixed(1)}%</td></tr>`;
+        });
+
+        const atm = strikes[0].strike;
+        const hr = await fetch(`${API_BASE}/api/hedge?strike=${atm}&underlying=BANKNIFTY`);
+        const hedge = await hr.json();
+        document.getElementById('hedgeSuggestion').innerText = hedge.text;
+        renderPL(hedge.pl_data);
+      } catch (err) {
+        document.querySelector('#oiTable tbody').innerHTML = `<tr><td colspan="4">Error loading data</td></tr>`;
+        document.getElementById('hedgeSuggestion').innerText = "Error fetching hedge strategy.";
+      }
+    }
+    setInterval(loadOI, 3000);
+    loadOI();
+
+    // Plot P/L Chart
+    const ctx = document.getElementById('plChart').getContext('2d');
+    let plChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [{ label: 'Profit/Loss', data: [], borderColor: 'green', tension: 0.2 }] },
+      options: {
+        responsive: true,
+        scales: {
+          x: { title: { display: true, text: 'Underlying Price' } },
+          y: { title: { display: true, text: 'P/L ₹' } }
+        }
+      }
+    });
+
+    function renderPL(data) {
+      plChart.data.labels = data.map(d => d.price);
+      plChart.data.datasets[0].data = data.map(d => d.pl);
+      plChart.update();
+    }
+
+    // Load NIFTY500
+    async function loadStocks() {
+      try {
+        const stocks = await fetch(`${API_BASE}/api/nifty500`).then(r=>r.json());
+        const out = stocks.map(s => `<div>${s.symbol} – ₹${s.lastPrice}</div>`).join('');
+        document.getElementById('stockList').innerHTML = out;
+
+        document.getElementById('stockFilter').oninput = function(){
+          const filter = this.value.toLowerCase();
+          document.getElementById('stockList').innerHTML = stocks
+            .filter(s => s.symbol.toLowerCase().includes(filter))
+            .map(s => `<div>${s.symbol} – ₹${s.lastPrice}</div>`).join('');
+        };
+      } catch (err) {
+        document.getElementById('stockList').innerHTML = "Error loading stock data.";
+      }
+    }
+    loadStocks();
+
+    // Load Market News
+    async function loadNews() {
+      try {
+        const news = await fetch(`${API_BASE}/api/news`).then(r=>r.json());
+        document.getElementById('newsList').innerHTML = news
+          .map(n=>`<li>${n.headline} <em>(${n.sentiment})</em></li>`).join('');
+      } catch (err) {
+        document.getElementById('newsList').innerHTML = "<li>Error loading news.</li>";
+      }
+    }
+    setInterval(loadNews, 60000);
+    loadNews();
+  </script>
+</body>
+</html>
